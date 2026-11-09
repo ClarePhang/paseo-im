@@ -1,0 +1,29 @@
+name: 渠道接入请求
+description: 请求新增 IM 渠道或反馈某渠道接入问题
+labels: [channel]
+body:
+  - type: input
+    id: channel-name
+    attributes:
+      label: 渠道/平台
+      description: 平台名 + 官方 API/协议形态（官方 bot API / 开放平台 / 非官方协议）
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 请求类型
+      options: [新渠道接入, 已支持渠道的接入问题, 凭据获取指引]
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: 协议/文档链接
+      description: 官方文档地址；非官方协议请给出参考实现与许可证
+  - type: checkboxes
+    id: matrix
+    attributes:
+      label: 已查矩阵
+      options:
+        - label: 已确认 docs/channel-test-matrix.md 中该渠道现状

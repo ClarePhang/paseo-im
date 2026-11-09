@@ -1,0 +1,76 @@
+{
+  "name": "paseo-im",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Connect IM bots (Feishu, WeChat, DingTalk, WeCom, QQ, Slack, Telegram, Discord, WhatsApp, iMessage, Matrix) to Paseo agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ClarePhang/paseo-im.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ClarePhang/paseo-im/issues"
+  },
+  "homepage": "https://github.com/ClarePhang/paseo-im#readme",
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
+    "test": "node --test tests/*.test.ts tests/**/*.test.ts",
+    "check:package": "node scripts/check-package.mjs",
+    "check:runtime": "node scripts/check-runtime.mjs"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.73.0",
+    "@tencent-connect/qqbot-nodejs": "1.0.4",
+    "@wecom/aibot-node-sdk": "1.0.7",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "dingtalk-stream": "2.1.4",
+    "entities": "8.1.0",
+    "marked": "18.1.1",
+    "qrcode": "1.5.4",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@getpaseo/client": "0.15.2",
+    "@getpaseo/plugin": "0.15.2",
+    "@types/node": "24.10.0",
+    "@types/qrcode": "1.5.5",
+    "@types/react": "~19.2.0",
+    "@types/ws": "8.18.1",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "zod": "^4.4.3"
+  },
+  "files": [
+    "paseo-plugin.json",
+    "OVERVIEW.md",
+    "index.client.tsx",
+    "index.server.ts",
+    "client/",
+    "server/",
+    "shared/",
+    "assets/",
+    "npm-shrinkwrap.json",
+    "package-lock.json"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "keywords": [
+    "paseo",
+    "paseo-plugin",
+    "im",
+    "feishu",
+    "wechat",
+    "dingtalk",
+    "wecom",
+    "qq",
+    "slack",
+    "telegram",
+    "discord",
+    "whatsapp",
+    "matrix",
+    "bot"
+  ]
+}

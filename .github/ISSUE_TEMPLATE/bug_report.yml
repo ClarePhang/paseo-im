@@ -1,0 +1,50 @@
+name: Bug 报告
+description: 报告 paseo-im 的缺陷
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先自查 [docs/gotchas.md](https://github.com/ClarePhang/paseo-im/blob/main/docs/gotchas.md) 的已知坑位与 §6 排查工作法。
+        **脱敏提醒**：不要粘贴真实 token / AppSecret / 完整用户 ID / 对话隐私内容；日志请保留原始堆栈行。
+  - type: dropdown
+    id: channel
+    attributes:
+      label: 渠道
+      options: [QQ, Telegram, 微信, 飞书, 钉钉, 企业微信(智能机器人), 企业微信自建应用, Slack, Discord, WhatsApp, iMessage, Matrix, 通用/其他]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 发生阶段
+      options: [接入/配对, 入站消息, 回复投递, 进度/流式, 媒体收发, 连接稳定性, 其他]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 现象
+      description: 期望行为 vs 实际行为；涉及消息收发请附 `paseo plugin logs paseo-im` 对应时段日志（已脱敏）
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本/commit
+    validations:
+      required: true
+  - type: checkboxes
+    id: selfcheck
+    attributes:
+      label: 自查
+      options:
+        - label: 已跑 `npm run typecheck && npm test` 全绿
+        - label: 已附脱敏后日志
+        - label: 已确认不含真实凭据/用户 ID

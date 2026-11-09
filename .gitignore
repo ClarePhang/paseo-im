@@ -1,0 +1,17 @@
+node_modules/
+*.log
+.DS_Store
+
+# build artifacts
+dist/
+*.tsbuildinfo
+
+# local secrets / env — credentials live in $PASEO_HOME/plugin-data, never in git
+.env
+.env.*
+secrets/
+
+# test & acceptance runtime artifacts
+playwright-report/
+test-results/
+coverage/
