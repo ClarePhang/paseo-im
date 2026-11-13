@@ -15,6 +15,7 @@ import {
 } from "./agents.ts";
 import type { ChannelAdapter } from "./channels/types.ts";
 import { AgentQueue } from "./queue.ts";
+import { readNewEntries, readWatermark, writeWatermark } from "./bots-plus-outbox.ts";
 import { splitChunks } from "./format/chunks.ts";
 import { isAuthorized, deniedHint } from "./policy.ts";
 import { createProgressSink, type ProgressSink } from "./progress.ts";
@@ -59,6 +60,54 @@ export class Bridge {
 
   get blockedOutboundCount(): number {
     return this.sensitiveBlockedCount;
+  }
+
+  private outboxWatermark = -1;
+  private outboxSeqLoaded = false;
+  private outboxTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** P2b 第一步：outbox 单向通知轮询（bots+ 写、本桥消费投递 ownerPairing；decisions 回写=第二步）。
+   *  防线①：收件人=ownerPairing.ownerChatId only（未配对=无通道，静默跳过）。
+   *  通知文本只拼 allowlist 字段（bots+ 侧已脱敏）；发送失败降级 breadcrumb（watermark 不推进→下轮重试）。 */
+  startOutboxPolling(pollMs = 30_000): void {
+    if (this.outboxTimer) return;
+    this.outboxTimer = setInterval(() => {
+      void this.pollOutbox().catch((error) => {
+        this.deps.log("warn", `[bots-plus-outbox] 轮询失败：${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, pollMs);
+    this.deps.signal?.addEventListener("abort", () => {
+      clearInterval(this.outboxTimer);
+    }, { once: true });
+  }
+
+  async pollOutbox(): Promise<void> {
+    if (!this.outboxSeqLoaded) {
+      this.outboxWatermark = await readWatermark();
+      this.outboxSeqLoaded = true;
+    }
+    const pairing = this.deps.state.get().ownerPairing;
+    if (!pairing?.ownerId || !pairing.ownerChatId) return;
+    const entries = await readNewEntries(this.outboxWatermark);
+    if (entries.length === 0) return;
+    let delivered = this.outboxWatermark;
+    for (const entry of entries) {
+      const text =
+        entry.kind === "approval-notify"
+          ? `[bots+] 审批等待：${entry.botName} · ${entry.title}${entry.expiresAt ? `（${entry.expiresAt} 过期）` : ""} · ref ${entry.ref ?? "-"}`
+          : `[bots+] 例行失败：${entry.botName} · ${entry.routineId ?? "-"} 连败 ${entry.failures ?? 0} 次`;
+      const adapter = this.deps.adapter();
+      const sent = await adapter
+        .sendText({ chatId: pairing.ownerChatId, text })
+        .then(() => true)
+        .catch(() => false);
+      if (!sent) break; // 投递失败：watermark 不推进，下轮重试（避免丢通知）
+      delivered = entry.seq;
+    }
+    if (delivered > this.outboxWatermark) {
+      this.outboxWatermark = delivered;
+      await writeWatermark(delivered);
+    }
   }
 
   /** F23 发送侧：会话有效去向命中契约 sensitiveCheck=true 条目时逐条测试

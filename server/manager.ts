@@ -429,6 +429,8 @@ export class Manager {
       },
       new Router(() => this.daemon(), this.makeLogger(connection), () => this.botsContract.all),
     );
+    // P2b 第一步：outbox 单向通知轮询（bots+ 写、本桥投递 ownerPairing；30s；signal 随连接中止清理）。
+    bridge.startOutboxPolling();
     const context: AdapterContext = {
       connectionId: connection.id,
       config: connection,
