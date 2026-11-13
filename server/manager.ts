@@ -10,6 +10,7 @@ import { CHANNEL_SPECS } from "../shared/channels.ts";
 import { CHANNEL_IDS, type ChannelId } from "../shared/model.ts";
 import { imSettings, type ImSettings } from "../shared/settings.ts";
 import { Bridge } from "./bridge.ts";
+import { BotsContractLoader } from "./bots-contract.ts";
 import { connectLocalDaemon, type DaemonConnection } from "./daemon.ts";
 import { DeferredRegistry } from "./deferred.ts";
 import { sleep } from "./files.ts";
@@ -57,6 +58,7 @@ export class Manager {
   private readonly queue = new AgentQueue();
   private readonly controller = new AbortController();
   private readonly deferred: DeferredRegistry;
+  private readonly botsContract: BotsContractLoader;
   private daemonConnection: DaemonConnection | null = null;
   private daemonPromise: Promise<PaseoApi> | null = null;
   private readSettings: () => Promise<ImSettings> = async () => imSettings.schema.parse({});
@@ -70,6 +72,10 @@ export class Manager {
     this.deferred = new DeferredRegistry({
       sweep: (jobId) => this.sweepDeferred(jobId),
       intervalMs: 60_000,
+    });
+    this.botsContract = new BotsContractLoader({
+      home,
+      log: (level, message) => console[level === "info" ? "log" : level](`[paseo-im bots-contract] ${message}`),
     });
   }
 
@@ -91,15 +97,21 @@ export class Manager {
   }
 
   private async run(): Promise<void> {
+    await this.botsContract.start();
     await this.registry.load();
     for (const connection of this.registry.list()) {
-      if (connection.enabled) void this.activate(connection).catch(() => {});
+      if (connection.enabled) {
+        void this.activate(connection).catch((error) => {
+          console.error(`[paseo-im ${connection.channel}/${connection.name}] 启动失败：${(error as Error).message}`);
+        });
+      }
     }
   }
 
   async stop(): Promise<void> {
     this.controller.abort();
     this.deferred.stop();
+    await this.botsContract.stop().catch(() => {});
     for (const attempt of this.attempts.values()) await attempt.session.stop().catch(() => {});
     this.attempts.clear();
     for (const id of [...this.active.keys()]) await this.deactivate(id).catch(() => {});
@@ -141,9 +153,23 @@ export class Manager {
     return definition;
   }
 
+  /** 同渠道同名多实例会竞速同一渠道会话（如双 Telegram long-poll 触发 409、
+   * 双写同一凭据目录）。注册与启动时显式报错，不静默放行。 */
+  private assertNoDuplicateChannelInstance(channel: ChannelId, name: string, selfId: string | null): void {
+    const clash = this.registry
+      .list()
+      .find((entry) => entry.enabled && entry.id !== selfId && entry.channel === channel && entry.name === name);
+    if (clash) {
+      throw new UserFacingError(
+        `已存在同渠道同名的启用连接「${clash.name}」（${clash.id.slice(0, 8)}）；同渠道同名多实例会竞速同一渠道会话，请先改名或停用原连接。`,
+      );
+    }
+  }
+
   async connect(input: ConnectInput): Promise<{ id: string; detail: string | null }> {
     const definition = this.definition(input.channel);
     definition.checkPlatform?.();
+    this.assertNoDuplicateChannelInstance(input.channel, input.name, null);
     const configured = definition.configure(input.fields);
     const candidate = {
       id: randomUUID(),
@@ -376,6 +402,7 @@ export class Manager {
 
   private async activate(connection: Connection): Promise<void> {
     await this.deactivate(connection.id).catch(() => {});
+    this.assertNoDuplicateChannelInstance(connection.channel, connection.name, connection.id);
     const definition = this.definition(connection.channel);
     definition.checkPlatform?.();
     const state = new StateStore(connection.id);
@@ -398,8 +425,9 @@ export class Manager {
         signal: this.controller.signal,
         log: (level, message) =>
           console[level === "info" ? "log" : level](`[paseo-im ${connection.channel}/${connection.name}] ${message}`),
+        contractTargets: () => this.botsContract.all,
       },
-      new Router(() => this.daemon(), this.makeLogger(connection)),
+      new Router(() => this.daemon(), this.makeLogger(connection), () => this.botsContract.all),
     );
     const context: AdapterContext = {
       connectionId: connection.id,

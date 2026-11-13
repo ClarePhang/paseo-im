@@ -1,6 +1,7 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { Connection, Target } from "../shared/config.ts";
 import { UserFacingError } from "../shared/errors.ts";
+import type { PaseoImTargetEntry } from "./bots-contract.ts";
 import { refreshLinkedAgent } from "./agents.ts";
 import type { StateStore } from "./state-store.ts";
 
@@ -12,14 +13,40 @@ export interface PrepareResult {
   context: string;
 }
 
+/** bots-contract/v1 target 注册表快照（无契约 = 空数组）。 */
+export type ContractTargets = readonly PaseoImTargetEntry[];
+
+/** 统一去向解析：显式会话绑定 > 连接默认去向 > 契约注册表回退。
+ * 契约条目等效 {kind:'agent', agentId} target（不新增 target kind）；sharedHistory
+ * 取 true：bots+ 主聊天按约定允许多个 IM 会话汇入同一 agent，不开共享会命中
+ * 「已绑定其他 IM 会话」防护。返回 null 表示无任何去向（契约回退也不可用）。 */
+export function resolveTarget(
+  config: Connection,
+  conversationKey: string,
+  contractTargets?: ContractTargets,
+): Target | null {
+  const binding = (config.bindings as Record<string, Target | null>)[conversationKey];
+  if (binding) return binding;
+  if (config.target) return config.target;
+  const entry = contractTargets?.[0];
+  if (!entry) return null;
+  return { kind: "agent", agentId: entry.agentId, sharedHistory: true };
+}
+
 /** Resolve the message destination and make sure a live agent exists for it. */
 export class Router {
   private readonly daemon: () => Promise<PaseoApi>;
   private readonly log: (level: "info" | "warn" | "error", message: string) => void;
+  private readonly contractTargets?: () => ContractTargets;
 
-  constructor(daemon: () => Promise<PaseoApi>, log?: (level: "info" | "warn" | "error", message: string) => void) {
+  constructor(
+    daemon: () => Promise<PaseoApi>,
+    log?: (level: "info" | "warn" | "error", message: string) => void,
+    contractTargets?: () => ContractTargets,
+  ) {
     this.daemon = daemon;
     this.log = log ?? (() => {});
+    this.contractTargets = contractTargets;
   }
 
   private api(): Promise<PaseoApi> {
@@ -27,8 +54,14 @@ export class Router {
   }
 
   targetFor(config: Connection, conversationKey: string): Target | null {
-    const binding = (config.bindings as Record<string, Target | null>)[conversationKey];
-    return binding ?? config.target;
+    const targets = this.contractTargets?.() ?? [];
+    const target = resolveTarget(config, conversationKey, targets);
+    const explicit =
+      (config.bindings as Record<string, Target | null>)[conversationKey] ?? config.target;
+    if (target && !explicit) {
+      this.log("info", `[bots-contract] 会话 ${conversationKey} 无显式去向，按契约路由到 agent ${target.kind === "agent" ? target.agentId : "未知"}。`);
+    }
+    return target;
   }
 
   async prepare(

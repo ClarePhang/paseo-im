@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Connection } from "../shared/config.ts";
 import { UserFacingError, userMessage } from "../shared/errors.ts";
 import type { ImSettings } from "../shared/settings.ts";
+import type { PaseoImTargetEntry } from "./bots-contract.ts";
 import { conversationKey as keyOf, type NormalizedMessage } from "../shared/model.ts";
 import {
   questionAnswers,
@@ -17,7 +18,7 @@ import { AgentQueue } from "./queue.ts";
 import { splitChunks } from "./format/chunks.ts";
 import { isAuthorized, deniedHint } from "./policy.ts";
 import { createProgressSink, type ProgressSink } from "./progress.ts";
-import { Router } from "./routing.ts";
+import { Router, resolveTarget } from "./routing.ts";
 import type { Job, StateStore } from "./state-store.ts";
 
 const maxInputChars = 12_000;
@@ -35,6 +36,8 @@ export interface BridgeDeps {
   deferred: { track(jobId: string): void; resolve(jobId: string): void };
   signal: AbortSignal;
   log: (level: "info" | "warn" | "error", message: string) => void;
+  /** bots-contract/v1 target 注册表（可选；缺省 = 空注册表：无契约路由、无 F23 出站检查）。 */
+  contractTargets?: () => readonly PaseoImTargetEntry[];
 }
 
 export function messageIdentity(connectionId: string, messageId: string): string {
@@ -46,9 +49,50 @@ export class Bridge {
   private readonly deps: BridgeDeps;
   private readonly router: Router;
 
+  /** F23 拦截计数（进程内累计，本连接；供诊断与测试观察）。 */
+  private sensitiveBlockedCount = 0;
+
   constructor(deps: BridgeDeps, router: Router) {
     this.deps = deps;
     this.router = router;
+  }
+
+  get blockedOutboundCount(): number {
+    return this.sensitiveBlockedCount;
+  }
+
+  /** F23 发送侧：会话有效去向命中契约 sensitiveCheck=true 条目时逐条测试
+   * patterns（按 agentId 匹配契约条目，显式绑定与契约回退去向都覆盖）。
+   * 返回命中的模式名（null = 放行）。非法正则跳过，不阻塞发送环。 */
+  private sensitiveHit(job: Job, text: string): string | null {
+    const targets = this.deps.contractTargets?.() ?? [];
+    if (!targets.length || !text) return null;
+    const target = resolveTarget(this.deps.config(), job.conversationKey, targets);
+    if (!target || target.kind !== "agent") return null;
+    const entry = targets.find((candidate) => candidate.agentId === target.agentId && candidate.sensitiveCheck);
+    if (!entry) return null;
+    for (const pattern of entry.patterns) {
+      try {
+        if (new RegExp(pattern, "u").test(text)) return pattern;
+      } catch {
+        // 契约下发的非法正则：跳过该条，继续检查其余模式。
+      }
+    }
+    return null;
+  }
+
+  /** 整条拦截：答案不落盘、不发送；breadcrumb（含命中模式名）+ 计数；
+   * 进度消息改写为既有中性文案。标记 delivery done 以解除 deferred 跟踪，
+   * 避免补发路径无限重试。 */
+  private async blockAnswer(job: Job, hit: string, sink: ProgressSink | null): Promise<void> {
+    this.sensitiveBlockedCount += 1;
+    this.deps.log(
+      "warn",
+      `[F23] 出站回复命中敏感模式「${hit}」，已整条拦截不发送（累计 ${this.sensitiveBlockedCount}）：conv=${job.conversationKey}`,
+    );
+    if (sink) await sink.abandon().catch(() => {});
+    this.deps.state.updateJob(job.messageId, { answer: "", delivery: "done" });
+    this.deps.deferred.resolve(job.messageId);
   }
 
   async handle(message: NormalizedMessage): Promise<void> {
@@ -213,6 +257,11 @@ export class Bridge {
       const settings = await this.deps.settings();
       const budgetMs = Math.max(60_000, settings.deferTimeoutMinutes * 60_000);
       const answer = await this.answerWithTimeout(job, sink, budgetMs);
+      const hit = this.sensitiveHit(job, answer);
+      if (hit) {
+        await this.blockAnswer(job, hit, sink);
+        return;
+      }
       const firstChunks = splitChunks(answer, readAdapter().capabilities.maxChunkChars);
       const first = firstChunks[0] ?? answer;
       const replaced = await sink.finish(first).catch((error) => {
@@ -296,6 +345,11 @@ export class Bridge {
 
   private async deliverAnswer(job: Job, answer: string): Promise<void> {
     const { state, adapter: readAdapter } = this.deps;
+    const hit = this.sensitiveHit(job, answer);
+    if (hit) {
+      await this.blockAnswer(job, hit, null);
+      return;
+    }
     const chunks = splitChunks(answer, readAdapter().capabilities.maxChunkChars);
     for (const chunk of chunks) {
       const sent = await readAdapter().sendText({
