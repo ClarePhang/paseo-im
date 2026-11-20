@@ -40,7 +40,7 @@ export async function loadPackage<T>(name: string): Promise<T> {
 **现象**：选完模型显示"未选择"；模型下拉无法滚动，后方选项点不到。
 
 **根因/修复**：
-- `config.provider` 约定 `"provider/model…"`，**model 本身可含斜杠**（`omp/tuya-gateway/glm-5.3-flash`、`omp/google-antigravity/claude-opus-4-6`；daemon 解析：首段=provider，其余=model）。拆分只能按**第一个斜杠**（`indexOf('/')` + slice）——`split("/")` 解构两段会截断 model。
+- `config.provider` 约定 `"provider/model…"`，**model 本身可含斜杠**（`omp/acme-inc/model-x`、`omp/other-provider/deep-model-v2`；daemon 解析：首段=provider，其余=model）。拆分只能按**第一个斜杠**（`indexOf('/')` + slice）——`split("/")` 解构两段会截断 model。
 - 宿主 SettingsSelect（自适应菜单）选项超出可视高度时**不可滚动**、后方项点不到（菜单背景拦截）。≥5 项的长列表用屏内自绘 `OptionPicker`（`client/route-editor.tsx`：Pressable 行 + maxHeight 260 ScrollView，`nestedScrollEnabled`，web 滚轮/触屏均可滚）；短菜单（<5 项）保留 SettingsSelect。
 - choices 必须过滤不可用 provider（`status:"unavailable"`/`models:[]`）——否则用户随机选到不可用项。providers.snapshot：omp=ready+167 模型；models[].id 已含子前缀，choices 直接用。
 - providers.snapshot 字段形状：models 元素 `{provider,id,label,thinkingOptions}`、modes `{id,label}`——用运行时探针（node 直连 SDK 打印）核对，勿靠文档猜。

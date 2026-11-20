@@ -1,0 +1,79 @@
+#!/usr/bin/env node
+/** commit-msg hook：提交信息脱敏拦截（提交瞬间生效，不依赖推送）。
+ *
+ * 规则与 scripts/check-redaction.mjs 同源（读 .redaction-identity-rules.json，
+ * 含 allowlist 白名单 $harness/$model/$thinkingMode 占位变量豁免）。
+ * 启用：git config core.hooksPath .githooks（CONTRIBUTING 有说明）。
+ */
+import { readFileSync, existsSync } from "node:fs";
+
+const commitMsgFile = process.argv[2];
+if (!commitMsgFile) process.exit(0);
+const msg = readFileSync(commitMsgFile, "utf8");
+
+const join = (parts) => parts.join("");
+const RULES = [
+  { name: "real-weixin-user-id", pattern: new RegExp(join(["o9cq", "803"]), "i") },
+  { name: "real-tg-user-id", pattern: new RegExp(join(["477", "958578"])) },
+  { name: "real-qq-sender", pattern: new RegExp(join(["AB33", "B77"]), "i") },
+  { name: "real-qq-appid", pattern: new RegExp(join(["190", "632", "4994"])) },
+  { name: "real-message-id-prefix", pattern: new RegExp(join(["752", "48[0-9]{10,}"])) },
+  { name: "local-absolute-path", pattern: /\/home\/[a-z_]+\//i },
+  {
+    name: "runtime-agent-uuid",
+    pattern: new RegExp(join(["cbcc", "478|", "d30", "abd10|", "41cc", "b6ef|", "01a1b6[de]"]), "i"),
+  },
+  { name: "daemon-serverid", pattern: /srv_[A-Za-z0-9_]{8,}|LAPTOP-[A-Z0-9-]+/ },
+];
+
+const IDENTITY_RULES_PATH = ".redaction-identity-rules.json";
+function loadIdentityRules() {
+  if (!existsSync(IDENTITY_RULES_PATH)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(IDENTITY_RULES_PATH, "utf8"));
+    return Object.entries(raw)
+      .filter(([name]) => name !== "allowlist")
+      .map(([name, entry]) => {
+        const patterns = Array.isArray(entry.patterns) ? entry.patterns : [entry.patterns];
+        return { name: `identity:${name}`, pattern: new RegExp(patterns.join("|"), entry.flags ?? "") };
+      });
+  } catch {
+    return [];
+  }
+}
+
+const allowlist = [];
+try {
+  const raw = JSON.parse(readFileSync(IDENTITY_RULES_PATH, "utf8"));
+  if (Array.isArray(raw.allowlist)) allowlist.push(...raw.allowlist.map((p) => new RegExp(p, "g")));
+} catch {
+  // 规则文件缺失/损坏时按无白名单处理（从严）。
+}
+
+const stripAllowlist = (text) => {
+  let out = text;
+  for (const allow of allowlist) out = out.replace(allow, "");
+  return out;
+};
+
+const stripped = stripAllowlist(msg);
+const hits = [];
+for (const rule of [...RULES, ...loadIdentityRules()]) {
+  for (const line of stripped.split("\n")) {
+    if (rule.pattern.test(stripAllowlist(line))) {
+      hits.push(`[${rule.name}] ${line.trim().slice(0, 110)}`);
+    }
+  }
+}
+
+if (hits.length > 0) {
+  console.error(`
+✗ 提交信息包含脱敏规则命中的内容（提交被拒绝）：
+${hits.map((hit) => `  ${hit}`).join("\n")}
+
+提交信息不得包含：真实个人数据、雇主/内部身份（公司名、内部网关、
+内部模型路径、主机名、内部账号）、运行时 UUID。
+允许的占位变量引用：$harness $model $thinkingMode
+规则文件：.redaction-identity-rules.json`);
+  process.exit(1);
+}

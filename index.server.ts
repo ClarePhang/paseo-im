@@ -39,7 +39,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(disconnectRpc, ({ id }) => manager.disconnect(id));
   server.handle(revokeRpc, ({ id, chatId }) => manager.revoke(id, chatId));
   server.handle(reviewRpc, ({ id, chatId, approve }) => manager.review(id, chatId, approve));
-  server.handle(pairingStartRpc, ({ channel, connectionId }) => manager.pairingStart(channel, connectionId));
+  server.handle(pairingStartRpc, ({ channel, connectionId, mode }) => manager.pairingStart(channel, connectionId, mode));
   server.handle(pairingPollRpc, ({ attemptId }) => manager.pairingPoll(attemptId));
   server.handle(testRpc, ({ id }) => manager.test(id));
   const removePermissionHook = server.addHook("agent.permission.after", async ({ agent, requestId }) => {

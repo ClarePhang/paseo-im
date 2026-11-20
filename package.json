@@ -15,7 +15,7 @@
   "homepage": "https://github.com/ClarePhang/paseo-im#readme",
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
-    "test": "node --test tests/*.test.ts tests/**/*.test.ts",
+    "test": "node --test tests/*.test.ts tests/**/*.test.ts && node scripts/check-redaction.mjs && node scripts/check-docs-links.mjs",
     "check:package": "node scripts/check-package.mjs",
     "check:runtime": "node scripts/check-runtime.mjs"
   },
@@ -31,8 +31,8 @@
     "ws": "8.22.0"
   },
   "devDependencies": {
-    "@getpaseo/client": "0.15.2",
-    "@getpaseo/plugin": "0.15.2",
+    "@getpaseo/client": "0.16.0",
+    "@getpaseo/plugin": "0.16.0",
     "@types/node": "24.10.0",
     "@types/qrcode": "1.5.5",
     "@types/react": "~19.2.0",

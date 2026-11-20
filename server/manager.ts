@@ -14,6 +14,7 @@ import { BotsContractLoader } from "./bots-contract.ts";
 import { connectLocalDaemon, type DaemonConnection } from "./daemon.ts";
 import { DeferredRegistry } from "./deferred.ts";
 import { sleep } from "./files.ts";
+import { applyOwnerPairing, OwnerPairingBook } from "./owner-pairing.ts";
 import type { AdapterContext, ChannelAdapter, ChannelDefinition, PairingSession } from "./channels/types.ts";
 import { AgentQueue } from "./queue.ts";
 import { Registry } from "./registry.ts";
@@ -51,6 +52,8 @@ const pairingTtlMs = 30 * 60_000;
 export class Manager {
   readonly registry = new Registry();
   readonly secrets = new SecretStore();
+  /** owner 配对码账本（进程内存；明文码不落盘）。 */
+  readonly pairingBook = new OwnerPairingBook();
   private readonly active = new Map<string, ActiveConnection>();
   private readonly attempts = new Map<string, PairingAttempt>();
   private readonly errors = new Map<string, string>();
@@ -114,6 +117,7 @@ export class Manager {
     await this.botsContract.stop().catch(() => {});
     for (const attempt of this.attempts.values()) await attempt.session.stop().catch(() => {});
     this.attempts.clear();
+    this.pairingBook.clear();
     for (const id of [...this.active.keys()]) await this.deactivate(id).catch(() => {});
     await this.daemonConnection?.close().catch(() => {});
     this.daemonConnection = null;
@@ -294,8 +298,13 @@ export class Manager {
     return { approved: approve };
   }
 
-  async pairingStart(channel: ChannelId, connectionId?: string): Promise<{ attemptId: string }> {
+  async pairingStart(channel: ChannelId, connectionId?: string, mode?: "qr" | "owner"): Promise<{ attemptId: string; code?: string }> {
     const definition = this.definition(channel);
+    // owner 配对：无扫码会话的渠道（或显式 mode="owner"）走配对码路径——连接必须
+    // 已启用运行（配对回执要经本连接的渠道发回），绑定经 bridge 拦截写入 state。
+    if (mode !== "qr" && (mode === "owner" || !definition.pairing)) {
+      return this.ownerPairingStart(channel, connectionId);
+    }
     let connection: Connection;
     if (connectionId) {
       const existing = this.registry.get(connectionId);
@@ -344,12 +353,41 @@ export class Manager {
     return { attemptId };
   }
 
+  /** owner 配对发码：目标连接必须已启用运行（无运行中的 bridge 就收不到「配对 <code>」）。
+   *  不带 connectionId 时要求该渠道恰有一条启用连接，多连接须显式指定。 */
+  private async ownerPairingStart(channel: ChannelId, connectionId?: string): Promise<{ attemptId: string; code: string }> {
+    let target: Connection;
+    if (connectionId) {
+      const existing = this.registry.get(connectionId);
+      if (!existing || existing.channel !== channel) throw new UserFacingError("连接不存在或渠道不匹配。");
+      target = existing;
+    } else {
+      const enabled = this.registry.list().filter((entry) => entry.channel === channel && entry.enabled);
+      if (enabled.length === 0) throw new UserFacingError("该渠道暂无已启用的连接，请先填写凭据连接。");
+      if (enabled.length > 1) throw new UserFacingError("该渠道有多个连接，请指定 connectionId 后再配对。");
+      target = enabled[0]!;
+    }
+    if (!this.active.has(target.id)) throw new UserFacingError("连接未在运行，请先启用连接再配对。");
+    return this.pairingBook.start(target.id);
+  }
+
   async pairingPoll(attemptId: string): Promise<{
-    status: "pending" | "scanned" | "ok" | "expired" | "failed";
+    status: "pending" | "scanned" | "ok" | "expired" | "failed" | "none";
     qrDataUrl?: string;
     detail?: string | null;
     connectionId?: string;
+    ownerId?: string;
   }> {
+    // owner 配对确认：绑定落盘（hash=发码时的 nonce）即 ok；不进扫码 configure/activate 路径。
+    const ownerAttempt = this.pairingBook.attempt(attemptId);
+    if (ownerAttempt) {
+      const pairing = this.active.get(ownerAttempt.connectionId)?.state.get().ownerPairing ?? null;
+      const outcome = this.pairingBook.poll(attemptId, pairing);
+      if (outcome.status === "ok") {
+        return { status: "ok", ownerId: outcome.ownerId, connectionId: ownerAttempt.connectionId };
+      }
+      return outcome;
+    }
     const attempt = this.attempts.get(attemptId);
     if (!attempt) return { status: "expired", detail: "配对会话不存在或已失效，请重新发起。" };
     if (Date.now() > attempt.expiresAt) {
@@ -426,6 +464,8 @@ export class Manager {
         log: (level, message) =>
           console[level === "info" ? "log" : level](`[paseo-im ${connection.channel}/${connection.name}] ${message}`),
         contractTargets: () => this.botsContract.all,
+        tryOwnerPairing: (senderId, chatId, code) =>
+          applyOwnerPairing({ book: this.pairingBook, state, connectionId: connection.id, senderId, chatId, code }),
       },
       new Router(() => this.daemon(), this.makeLogger(connection), () => this.botsContract.all),
     );

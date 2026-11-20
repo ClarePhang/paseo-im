@@ -120,8 +120,17 @@ export const reviewRpc = defineRpc({
 
 export const pairingStartRpc = defineRpc({
   name: "im.pairing.start",
-  input: z.object({ channel: z.enum(CHANNEL_IDS), connectionId: z.uuid().optional() }).strict(),
-  output: z.object({ attemptId: z.string().min(1).max(64) }).strict(),
+  input: z
+    .object({
+      channel: z.enum(CHANNEL_IDS),
+      connectionId: z.uuid().optional(),
+      /** owner=发 64hex 配对码（用户在渠道 dm 发「配对 <code>」完成绑定）；缺省=扫码渠道走扫码，否则 owner。 */
+      mode: z.enum(["qr", "owner"]).optional(),
+    })
+    .strict(),
+  output: z
+    .object({ attemptId: z.string().min(1).max(64), code: z.string().length(64).optional() })
+    .strict(),
 });
 
 export const pairingPollRpc = defineRpc({
@@ -129,10 +138,11 @@ export const pairingPollRpc = defineRpc({
   input: z.object({ attemptId: z.string().min(1).max(64) }).strict(),
   output: z
     .object({
-      status: z.enum(["pending", "scanned", "ok", "expired", "failed"]),
+      status: z.enum(["pending", "scanned", "ok", "expired", "failed", "none"]),
       qrDataUrl: z.string().max(100_000).optional(),
       detail: z.string().nullable().optional(),
       connectionId: z.uuid().optional(),
+      ownerId: z.string().max(256).optional(),
     })
     .strict(),
 });

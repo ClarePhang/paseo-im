@@ -3,8 +3,15 @@
   "name": "IM",
   "description": "Connect Feishu, WeChat, DingTalk, WeCom, QQ, Slack, Telegram, Discord, WhatsApp, iMessage and Matrix bots to Paseo agents.",
   "requirements": {
-    "paseo": ">=0.15.2"
+    "paseo": ">=0.16.0 <0.17.0"
   },
-  "build": [["npm", "ci", "--omit=dev", "--ignore-scripts"]],
+  "build": [
+    [
+      "npm",
+      "ci",
+      "--omit=dev",
+      "--ignore-scripts"
+    ]
+  ],
   "media": []
 }

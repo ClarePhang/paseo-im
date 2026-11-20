@@ -18,4 +18,4 @@
 按 Harness Model 格式填写；无 agent 参与选 none 并删除模型行。
 
 - Agent participation: `none` / `assisted (human-reviewed)` / `autonomous (human-reviewed)`
-- Model: `<provider/model>`（如 `omp/tuya-gateway/glm-5.3-flash`）
+- Model: `<provider/model>`（如 `omp/acme-inc/model-x`）

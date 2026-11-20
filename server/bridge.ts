@@ -15,7 +15,8 @@ import {
 } from "./agents.ts";
 import type { ChannelAdapter } from "./channels/types.ts";
 import { AgentQueue } from "./queue.ts";
-import { readNewEntries, readWatermark, writeWatermark } from "./bots-plus-outbox.ts";
+import { appendDecision, parseDecisionCommand, readNewEntries, readWatermark, writeWatermark, type OutboxEntry } from "./bots-plus-outbox.ts";
+import { parsePairingCommand } from "./owner-pairing.ts";
 import { splitChunks } from "./format/chunks.ts";
 import { isAuthorized, deniedHint } from "./policy.ts";
 import { createProgressSink, type ProgressSink } from "./progress.ts";
@@ -39,6 +40,9 @@ export interface BridgeDeps {
   log: (level: "info" | "warn" | "error", message: string) => void;
   /** bots-contract/v1 target 注册表（可选；缺省 = 空注册表：无契约路由、无 F23 出站检查）。 */
   contractTargets?: () => readonly PaseoImTargetEntry[];
+  /** owner 配对码裁决（im.pairing.start 下发，本桥拦截）：ignored=无 pending 配对（不拦），
+   *  paired=命中已写 ownerPairing，rejected=错码/过期/改绑。缺省（无 manager 场景）=不启用。 */
+  tryOwnerPairing?: (senderId: string, chatId: string, code: string) => Promise<"ignored" | "paired" | "rejected">;
 }
 
 export function messageIdentity(connectionId: string, messageId: string): string {
@@ -65,6 +69,9 @@ export class Bridge {
   private outboxWatermark = -1;
   private outboxSeqLoaded = false;
   private outboxTimer: ReturnType<typeof setInterval> | undefined;
+  /** approval/permission-notify 投递记录（ref→平台消息 id）：decision-receipt 到达时编辑原通知用。
+   *  仅内存——重启丢失后回退发新消息（可接受，不阻塞回执语义）。 */
+  private outboxRefMessages = new Map<string, string>();
 
   /** P2b 第一步：outbox 单向通知轮询（bots+ 写、本桥消费投递 ownerPairing；decisions 回写=第二步）。
    *  防线①：收件人=ownerPairing.ownerChatId only（未配对=无通道，静默跳过）。
@@ -92,14 +99,36 @@ export class Bridge {
     if (entries.length === 0) return;
     let delivered = this.outboxWatermark;
     for (const entry of entries) {
+      const adapter = this.deps.adapter();
+      // decision-receipt：命中 ref→messageId 且 adapter 有编辑面 → 编辑原审批通知；
+      // 重启丢 map/渠道不支持/编辑失败 → 回退发新消息（不阻塞 watermark 推进）。
+      if (entry.kind === "decision-receipt") {
+        if (await this.editOutboxReceipt(adapter, pairing.ownerChatId, entry)) {
+          delivered = entry.seq;
+          continue;
+        }
+        const sent = await adapter
+          .sendText({ chatId: pairing.ownerChatId, text: `[bots+] ${entry.title}` })
+          .then(() => true)
+          .catch(() => false);
+        if (!sent) break; // 投递失败：watermark 不推进，下轮重试（避免丢回执）
+        delivered = entry.seq;
+        continue;
+      }
       const text =
         entry.kind === "approval-notify"
           ? `[bots+] 审批等待：${entry.botName} · ${entry.title}${entry.expiresAt ? `（${entry.expiresAt} 过期）` : ""} · ref ${entry.ref ?? "-"}`
-          : `[bots+] 例行失败：${entry.botName} · ${entry.routineId ?? "-"} 连败 ${entry.failures ?? 0} 次`;
-      const adapter = this.deps.adapter();
+          : entry.kind === "permission-notify"
+            ? `[bots+] 审批等待：${entry.botName} · ${entry.title} · 5分钟内回复 批 ${entry.ref ?? "-"} 或 拒 ${entry.ref ?? "-"}`
+            : `[bots+] 例行失败：${entry.botName} · ${entry.routineId ?? "-"} 连败 ${entry.failures ?? 0} 次`;
       const sent = await adapter
         .sendText({ chatId: pairing.ownerChatId, text })
-        .then(() => true)
+        .then((result) => {
+          if ((entry.kind === "approval-notify" || entry.kind === "permission-notify") && entry.ref && result.messageId) {
+            this.outboxRefMessages.set(entry.ref, result.messageId);
+          }
+          return true;
+        })
         .catch(() => false);
       if (!sent) break; // 投递失败：watermark 不推进，下轮重试（避免丢通知）
       delivered = entry.seq;
@@ -107,6 +136,22 @@ export class Bridge {
     if (delivered > this.outboxWatermark) {
       this.outboxWatermark = delivered;
       await writeWatermark(delivered);
+    }
+  }
+
+  /** decision-receipt 编辑原审批通知：ref→messageId 命中且 adapter.editMessage 存在才尝试；
+   *  成功后清 map 防重复编辑；返回 false（未命中/不支持/编辑失败）= 调用方回退发新消息。 */
+  private async editOutboxReceipt(adapter: ChannelAdapter, chatId: string, entry: OutboxEntry): Promise<boolean> {
+    const ref = entry.ref;
+    const messageId = ref ? this.outboxRefMessages.get(ref) : undefined;
+    if (!messageId || !ref || !adapter.editMessage) return false;
+    try {
+      await adapter.editMessage(messageId, chatId, `[bots+] ✅ ${entry.title}`);
+      this.outboxRefMessages.delete(ref);
+      return true;
+    } catch (error) {
+      this.deps.log("warn", `[bots-plus-outbox] 回执编辑失败，回退发新消息：${error instanceof Error ? error.message : String(error)}`);
+      return false;
     }
   }
 
@@ -147,6 +192,50 @@ export class Bridge {
   async handle(message: NormalizedMessage): Promise<void> {
     const { state, config: readConfig } = this.deps;
     if (state.hasSeen(message.messageId)) return;
+    // P2b 第二步：owner 私聊审批命令拦截（「批/拒 <ref>」，ref=card- 短码或 requestId）——防线①②：sender=ownerId 且私聊才处理；
+    // 非 owner/群聊的同形文本走正常流程（不拦不回显）。写 decisions 落盘，bots+ 读方代批。
+    const pairingNow = state.get().ownerPairing;
+    if (
+      pairingNow?.ownerId && pairingNow.ownerChatId &&
+      message.kind === "dm" && message.chatId === pairingNow.ownerChatId && message.senderId === pairingNow.ownerId &&
+      message.text && parseDecisionCommand(message.text) !== null
+    ) {
+      const cmd = parseDecisionCommand(message.text)!;
+      const channelUser = createHash("sha256").update(message.senderId).digest("hex").slice(0, 16);
+      const entry = await appendDecision(undefined, {
+        ref: cmd.ref, behavior: cmd.behavior, channel: message.channel, channelUser,
+      }).catch((error: unknown) => {
+        this.deps.log("warn", `[bots-plus-decisions] 写入失败：${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      });
+      await this.deps.adapter().sendText({
+        chatId: message.chatId,
+        text: entry !== null ? `已记录：${cmd.behavior === "allow" ? "批准" : "拒绝"} ${cmd.ref}（bots+ 将在下一轮询执行）` : "决策写入失败，请重试或回主界面审批。",
+      }).catch(() => {});
+      return;
+    }
+    // P2c：owner 配对命令拦截（「配对 <64hex>」）——防线：码只由本机 UI 经 im.pairing.start
+    // 下发（state 只存 sha256 摘要）；dm 任何人可发，错码/过期回执拒绝；
+    // 无 pending 配对（码格式命中但账本为空）不拦不回显，走正常流程。
+    if (message.kind === "dm" && message.text) {
+      const pairingCode = parsePairingCommand(message.text);
+      if (pairingCode && this.deps.tryOwnerPairing) {
+        const outcome = await this.deps.tryOwnerPairing(message.senderId, message.chatId, pairingCode).catch((error: unknown) => {
+          this.deps.log("warn", `[owner-pairing] 裁决失败：${error instanceof Error ? error.message : String(error)}`);
+          return "rejected" as const;
+        });
+        if (outcome !== "ignored") {
+          await this.deps
+            .adapter()
+            .sendText({
+              chatId: message.chatId,
+              text: outcome === "paired" ? "配对成功 ✅ 本渠道已绑定为 owner 通道" : "配对码无效或已过期",
+            })
+            .catch(() => {});
+          return;
+        }
+      }
+    }
     const config = readConfig();
     if (message.text && message.text.length > maxInputChars) {
       message = { ...message, text: `${message.text.slice(0, maxInputChars)}\n…（超长已截断）` };
