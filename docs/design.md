@@ -159,7 +159,7 @@ media-inbox/                # 入站媒体临时区（TTL 清理）
 | imessage | chat.db 轮询 + osascript | 自实现 | 无（macOS 权限） | none | 纯文本 | — | 不支持 | 仅 darwin；Linux 显示 unsupported |
 | matrix | CS API 长轮询 sync | 自实现（fetch） | accessToken 或 userId+password | m.replace edit + typing | HTML 白名单 | 16000 | uploadMedia | E2EE 首版不支持 |
 
-依赖策略：全部为 devDependencies（TS 源码发布 + manifest `build: npm ci --omit=dev --ignore-scripts`）。传输统一用原生 `fetch`/`WebSocket`（Node 24）/`ws` 包（daemon 与 Slack/Discord/WS 渠道共用）。
+依赖策略：运行期依赖（渠道 SDK、`@getpaseo/client`）放 `dependencies`，构建期/宿主注入依赖（`@getpaseo/plugin`、`react`/`react-native`、`@types/*`、`typescript`、`zod`）放 `devDependencies`。安装走 manifest `build: npm ci --omit=dev --ignore-scripts`，因此 `server/`、`shared/` 里**任何** `@getpaseo/*` 导入（含 `import type`——宿主构建器会做类型依赖解析）都必须在生产树里可解析；宿主只外置 `@getpaseo/plugin/*` 与 `zod`，`@getpaseo/client` 会被内联进 server bundle。锁文件只保留 `npm-shrinkwrap.json`（发布形态），`scripts/check-package.mjs` 守卫此约束。传输统一用原生 `fetch`/`WebSocket`（Node 24）/`ws` 包（daemon 与 Slack/Discord/WS 渠道共用）。重 SDK 走 `server/channels/runtime-loader.ts` 运行时装载（gotchas §1）。
 
 ## 6. Client 设计
 

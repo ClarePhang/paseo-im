@@ -27,12 +27,18 @@
 | 改去向不生效 | 换新 agent 后消息仍进旧会话 | 会话绑定压过 target + save 双实例竞态回滚 | gotchas §5.8 |
 | 钉钉卡片无令牌（P0） | 整渠道进度流必坏 | 审查发现 | channel-test-matrix |
 | P1×10 / P2×30 | 各渠道审查项 | 四组并行深审 | 审查修复提交线（36 文件 +1993/-295） | 同上 |
+| 全新安装构建失败（issue #1） | `paseo plugin add` 报 `Could not resolve type dependency "@getpaseo/client"`，侧栏无 IM 入口 | `@getpaseo/client` 只在 devDependencies，`npm ci --omit=dev` 后生产树无包，宿主构建器连 `import type` 也要解析 | gotchas §8 |
 
 ## 3. 自测 / 验收命令集（全部无人工可跑）
 
 ```sh run
 # 全量门禁：双侧 tsc + 全量测试（提交前必跑）
 cd "$(git rev-parse --show-toplevel)" && npm run typecheck && npm test
+```
+
+```sh run
+# 发布形状自检：清单字段 + 生产依赖可解析性（含 @getpaseo/* 导入守卫，issue #1）
+cd "$(git rev-parse --show-toplevel)" && npm run check:package
 ```
 
 ```sh run
@@ -77,5 +83,6 @@ await client.close();
 
 1. 其余 9 渠道实机联调（凭据到位后按矩阵 K 清单逐渠道验收；TG/微信/QQ 已闭环）。
 2. 微信三连若再现：按 gotchas §5.9 四层取证，`sendmessage ok` 行数为唯一判据，超 1 行先查本链路，1 行则反馈 iLink 平台。
-3. ~~`state-store` 测试 tmp 清理竞态（ENOTEMPTY，间歇 1/N）~~ **已根修**（写链 `drain()` 静止模式：`withStore` 先排空 fire-and-forget 持久化再 `rm`；`manager.deactivate` 同步获得排空语义，顺带消除重载截断最后一次 `updateJob` 持久化的窗口。state-store 单文件 30 连跑 + 全量 6 连跑验证）。余下 whatsapp 配对/并行全量的时序 flake 为另一类（负载相关，诊断法见 gotchas §7 附带坑），独立跟踪。
+3. ~~`state-store` 测试 tmp 清理竞态（ENOTEMPTY，间歇 1/N）~~ **已根修**（写链 `drain()` 静止模式：`withStore` 先排空 fire-and-forget 持久化再 `rm`；`manager.deactivate` 同步获得排空语义，顺带消除重载截断最后一次 `updateJob` 持久化的窗口。state-store 单文件 30 连跑 + 全量 6 连跑验证）。余下 whatsapp 配对/并行全量的时序 flake 为另一类（负载相关，诊断法见 gotchas §7 附带坑），独立跟踪。2026-11-21 复跑 5 轮补充观测：失败分别为 whatsapp 配对 10ms 断言、`bots-contract` loader 2s 轮询等待、slack harness tmp 清理 ENOTEMPTY；单跑均必过，`/tmp` 已累积数百个 `paseo-*` 测试目录（多轮复跑残留）。判定：与本轮依赖声明改动无关（改动未触及 `tests/`、`server/`，且无测试读取 package.json/manifest）。
 4. Telegram 偶发 `fetch failed`（IPv6 修复后残余瞬时抖动）：自动重试已覆盖，若频率上升按 §5.5 排查序列复核宿主 v6 路由。
+5. 全新安装修复（issue #1）：本机 0.16.2 已闭环——构建器验证生产树可解析并构建通过，独立 `PASEO_HOME` 实机 `paseo plugin add` 成功、插件 `running`、日志 `Plugin ready`、`im.list` 返回 12 渠道；余 0.15.4 报告者环境、registry 源安装与真实 IM 渠道收发待复验。

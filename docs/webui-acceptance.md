@@ -139,3 +139,17 @@ net.setDefaultAutoSelectFamily(false);
 ### 配对渠道自动进入修复（同日）
 
 微信/WhatsApp/企微创建连接后自动拉起扫码配对（二维码直出）；接入表单「扫码配对」行提示改为准确描述。微信 iLink 配对会话已实测：`start()`→`poll()` 返回 `pending` + 二维码 dataURL（30s 长轮询为协议设计）。
+
+## F. 全新安装（issue #1 回归项）
+
+前置：干净副本（无 `node_modules`），Paseo 0.15.4 或更新。
+
+14. 干净副本执行 `npm ci --omit=dev --ignore-scripts` 后，`node -e "require.resolve('@getpaseo/client/package.json')"` 可解析（生产树含宿主 SDK）。
+15. `paseo plugin add <干净副本路径>`（或 registry `clarephang/im`）构建通过，无 `Could not resolve type dependency "@getpaseo/client"`。
+16. 插件状态 `running`，侧栏出现 **IM** 入口；`paseo plugin logs paseo-im` 无未捕获异常。
+
+本机记录（2026-11-21，Paseo 0.16.2）：
+
+- 构建级（隔离副本，无 daemon）：修复前 `npm ci --omit=dev` 后 `node_modules/@getpaseo` 不存在，构建器逐字报 `Could not resolve type dependency "@getpaseo/client" imported by .../server/manager.ts`；修复后生产树装出 `client`/`protocol`/`relay`，构建通过（server 11,426,892 B / client 47,476 B），按 daemon 语义 `(function(require){…})` 函数作用域加载成功；`tsc` 双侧 + 457 测试全绿。
+- 实机安装（独立 `PASEO_HOME` + `PASEO_LISTEN=127.0.0.1:6798` + `pluginsEnabled=true`，不触生产 daemon）：`paseo plugin add <repo>` 成功，`plugin ls` 为 `running / enabled`，`plugin logs` 见 `[paseo] Plugin ready` 且无未捕获异常（bots-contract 契约文件缺失按空注册表正常降级）；RPC 环回 `im.list` 返回 12 渠道、`im.choices` 正常返回。
+- 未覆盖：真实 IM 渠道收发（无渠道凭据）；0.15.4 报告者环境与 registry 源待复验。
