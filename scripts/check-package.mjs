@@ -56,21 +56,25 @@ for (const target of ["index.server.ts", "index.client.tsx", "server", "shared",
   if (statSync(path).isDirectory()) walk(path);
   else hostImportFiles.push(path);
 }
-const HOST_IMPORT_RE =
-  /(?:import|export)\s+(type\s+)?[^;]*?from\s+["'](@getpaseo\/[^"']+)["']|import\s*\(\s*["'](@getpaseo\/[^"']+)["']/g;
+const FROM_IMPORT_RE =
+  /(?:import|export)\s+(type\s+)?[^;]*?from\s+["'](@getpaseo\/[^"']+)["']/g;
+// Side-effect imports, dynamic imports and require() all execute at runtime.
+const RUNTIME_IMPORT_RE =
+  /\bimport\s*["'](@getpaseo\/[^"']+)["']|\b(?:import|require)\s*\(\s*["'](@getpaseo\/[^"']+)["']\s*\)/g;
 const hostImports = new Map();
+const collect = (file, specifier, typeOnly) => {
+  const packageName = specifier.split("/").slice(0, 2).join("/");
+  if (HOST_INJECTED.includes(packageName)) return;
+  // Erased protocol types are host contracts and need no local install.
+  if (typeOnly && packageName === "@getpaseo/protocol") return;
+  const importers = hostImports.get(packageName) ?? new Set();
+  importers.add(relative(root, file));
+  hostImports.set(packageName, importers);
+};
 for (const file of hostImportFiles) {
-  for (const match of readFileSync(file, "utf8").matchAll(HOST_IMPORT_RE)) {
-    const typeOnly = Boolean(match[1]);
-    const specifier = match[2] ?? match[3];
-    const packageName = specifier.split("/").slice(0, 2).join("/");
-    if (HOST_INJECTED.includes(packageName)) continue;
-    // Erased protocol types are host contracts and need no local install.
-    if (typeOnly && packageName === "@getpaseo/protocol") continue;
-    const importers = hostImports.get(packageName) ?? new Set();
-    importers.add(relative(root, file));
-    hostImports.set(packageName, importers);
-  }
+  const source = readFileSync(file, "utf8");
+  for (const match of source.matchAll(FROM_IMPORT_RE)) collect(file, match[2], Boolean(match[1]));
+  for (const match of source.matchAll(RUNTIME_IMPORT_RE)) collect(file, match[1] ?? match[2], false);
 }
 for (const [packageName, importers] of hostImports) {
   if (pkg.dependencies?.[packageName]) ok(`${packageName} 在 dependencies`);
