@@ -65,7 +65,7 @@ const RULES = [
 // —— IDENTITY 规则（外置 git-ignored 文件，存在则并入）——
 const IDENTITY_RULES_PATH = ".redaction-identity-rules.json";
 function loadIdentityRules() {
-  if (!existsSync(IDENTITY_RULES_PATH)) return [];
+  if (!existsSync(IDENTITY_RULES_PATH)) return { rules: [], allowlist: [] };
   try {
     const raw = JSON.parse(readFileSync(IDENTITY_RULES_PATH, "utf8"));
     const rules = Object.entries(raw)

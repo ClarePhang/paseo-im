@@ -148,3 +148,36 @@ net.setDefaultAutoSelectFamily(false);
 **验证**：重载后日志 `恢复 1 条中断的在途回复。`（weixin/qq 各一）→ 补发走完 `sendmessage ok`（bytes=274，恰好 1 次 HTTP）→ 用户截图确认微信侧恰好显示 1 遍。1 发 = 1 显，出站链路干净；历史「三连显示」若再现即为 iLink 平台显示层。
 
 **附带坑**：并行全量 `npm test` 下 whatsapp 配对测试（二维码→scanned→ok）会时序 flake（10ms 级断言），单独跑必过（HEAD 与改动侧均验证）——判「我的改动弄坏的」之前先单跑该文件。
+
+## 8. 全新安装构建失败：宿主 SDK 被当成 devDependency（issue #1）
+
+**现象**：`paseo plugin add clarephang/im`（或 `github:ClarePhang/paseo-im`）在 server 构建阶段失败，IM 侧栏永不出现：
+
+```
+ERROR: [plugin: paseo-plugin-server-runtime-boundary] Could not resolve type dependency
+"@getpaseo/client" imported by .../checkout/server/manager.ts
+```
+
+报错文件可能落在任一 `server/*.ts`；偶发只在 `manager.ts`，因为那是遍历到的第一个。
+
+**根因**：`@getpaseo/client` 只声明在 `devDependencies`，而 manifest 的安装命令是 `npm ci --omit=dev --ignore-scripts`，生产树里根本没有这个包。宿主构建器（`@getpaseo/server` 的 `compiler-build.js`）有两条约束叠加：
+
+1. `external` 只含宿主注入的 `PLUGIN_SDK_SPECIFIERS`（`@getpaseo/plugin/*`）与 `zod`——`@getpaseo/client` **不在**其中，会被 esbuild 内联，必须先装下来才能解析；
+2. boundary 插件对 `import type` 也做**类型依赖解析**（`Could not resolve type dependency`），所以把导入改成 `import type` 并不能绕过。`server/daemon.ts` 还真实调用 `createPaseoApi` / `DaemonClient`，本来就无法擦除。
+
+**修复**：`@getpaseo/client` 移入 `dependencies`（`@getpaseo/plugin` 仍留 devDependencies，它是宿主注入的构建期 SDK）；重新生成 `npm-shrinkwrap.json` 使其为 `dev: false`（连同 `@getpaseo/relay`、`@getpaseo/protocol`）。`scripts/check-package.mjs` 增加守卫：扫描 `index.server.ts`/`server/`/`shared/` 的 `@getpaseo/*` 导入（含 `type`），除宿主注入的 `@getpaseo/plugin` 与擦除的 `@getpaseo/protocol` 类型外，必须在 `dependencies` 中。
+
+**锁文件坑**：`npm install --package-lock-only` 只更新 `npm-shrinkwrap.json`，`package-lock.json` 仍保持旧的 `dev: true`；npm 只认 shrinkwrap，两份共存必然漂移——已删除 `package-lock.json`，发布形态只保留 shrinkwrap。
+
+**验证**（本机 Paseo 0.16.2 内置构建器，隔离副本，无需 daemon）：
+
+```sh run
+# 1) 干净副本按 manifest 安装 → 生产树应能解析宿主 SDK
+cd "$(git rev-parse --show-toplevel)" && npm run check:package
+# 2) 与 daemon 等价的全新安装
+T=$(mktemp -d) && git archive HEAD | tar -x -C "$T" && (cd "$T" && npm ci --omit=dev --ignore-scripts && node -e "require.resolve('@getpaseo/client/package.json')")
+```
+
+实测结果：修复前干净副本 `node_modules/@getpaseo` 整个不存在，宿主构建器逐字复现上述报错；修复后 `npm ci --omit=dev` 装出 `client`/`protocol`/`relay`，构建通过（server bundle 11.4 MB、client 47 KB），把 bundle 按 daemon 语义包成 `(function(require){…})` 在函数作用域执行可正常 load（未触发 §1 的 `__dirname` 类崩溃），`tsc` 双侧 + 457 测试全绿。实机安装用独立 `PASEO_HOME`+独立端口（`pluginsEnabled=true`）复跑 `paseo plugin add <repo>`：安装成功、状态 `running/enabled`、日志 `[paseo] Plugin ready` 无未捕获异常、RPC `im.list` 返回 12 渠道/`im.choices` 正常。真实 IM 收发与 0.15.4 环境仍待实机补验。
+
+**版本耦合**：`server/daemon.ts` 的 `appVersion` 仍为 `"0.15.2"`，而依赖已升到 `@getpaseo/client@0.16.0`——两者应同步升级（0.16.2 宿主实测可构建并运行，但握手协议兼容性以实机为准）。
