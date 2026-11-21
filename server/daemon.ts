@@ -43,7 +43,9 @@ export async function connectLocalDaemon(home: string): Promise<DaemonConnection
     url: target.url,
     clientId: "paseo-im",
     clientType: "cli",
-    appVersion: "0.15.2",
+    // Keep in sync with the @getpaseo/client version in package.json: the daemon
+    // uses this string to gate client capabilities.
+    appVersion: "0.16.0",
     connectTimeoutMs: 8000,
     localCredential: async () => {
       const current: { pid?: number; listen?: string } = JSON.parse(

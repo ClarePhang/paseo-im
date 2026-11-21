@@ -180,4 +180,4 @@ T=$(mktemp -d) && git archive HEAD | tar -x -C "$T" && (cd "$T" && npm ci --omit
 
 实测结果：修复前干净副本 `node_modules/@getpaseo` 整个不存在，宿主构建器逐字复现上述报错；修复后 `npm ci --omit=dev` 装出 `client`/`protocol`/`relay`，构建通过（server bundle 11.4 MB、client 47 KB），把 bundle 按 daemon 语义包成 `(function(require){…})` 在函数作用域执行可正常 load（未触发 §1 的 `__dirname` 类崩溃），`tsc` 双侧 + 457 测试全绿。实机安装用独立 `PASEO_HOME`+独立端口（`pluginsEnabled=true`）复跑 `paseo plugin add <repo>`：安装成功、状态 `running/enabled`、日志 `[paseo] Plugin ready` 无未捕获异常、RPC `im.list` 返回 12 渠道/`im.choices` 正常。真实 IM 收发与 0.15.4 环境仍待实机补验。
 
-**版本耦合**：`server/daemon.ts` 的 `appVersion` 仍为 `"0.15.2"`，而依赖已升到 `@getpaseo/client@0.16.0`——两者应同步升级（0.16.2 宿主实测可构建并运行，但握手协议兼容性以实机为准）。
+**版本耦合**：`server/daemon.ts` 的 `appVersion` 已与 `@getpaseo/client@0.16.0` 同步（该字符串参与 daemon 的能力门控），升级依赖时需一起改；0.16.2 宿主实测可构建并运行，但握手协议兼容性以实机为准。
