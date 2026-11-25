@@ -85,4 +85,6 @@ await client.close();
 2. 微信三连若再现：按 gotchas §5.9 四层取证，`sendmessage ok` 行数为唯一判据，超 1 行先查本链路，1 行则反馈 iLink 平台。
 3. ~~`state-store` 测试 tmp 清理竞态（ENOTEMPTY，间歇 1/N）~~ **已根修**（写链 `drain()` 静止模式：`withStore` 先排空 fire-and-forget 持久化再 `rm`；`manager.deactivate` 同步获得排空语义，顺带消除重载截断最后一次 `updateJob` 持久化的窗口。state-store 单文件 30 连跑 + 全量 6 连跑验证）。余下 whatsapp 配对/并行全量的时序 flake 为另一类（负载相关，诊断法见 gotchas §7 附带坑），独立跟踪。2026-11-21 复跑 5 轮补充观测：失败分别为 whatsapp 配对 10ms 断言、`bots-contract` loader 2s 轮询等待、slack harness tmp 清理 ENOTEMPTY；单跑均必过，`/tmp` 已累积数百个 `paseo-*` 测试目录（多轮复跑残留）。判定：与本轮依赖声明改动无关（改动未触及 `tests/`、`server/`，且无测试读取 package.json/manifest）。
 4. Telegram 偶发 `fetch failed`（IPv6 修复后残余瞬时抖动）：自动重试已覆盖，若频率上升按 §5.5 排查序列复核宿主 v6 路由。
-5. 全新安装修复（issue #1）：本机 0.16.2 已闭环——构建器验证生产树可解析并构建通过，独立 `PASEO_HOME` 实机 `paseo plugin add` 成功、插件 `running`、日志 `Plugin ready`、`im.list` 返回 12 渠道；余 0.15.4 报告者环境、registry 源安装与真实 IM 渠道收发待复验。
+5. 全新安装修复（issue #1）：**已闭环**（2026-11-25）——registry pin 切到 `v0.1.4`（`bfc4fd2`），干净 `PASEO_HOME` + Paseo 0.16.2 实机 `paseo plugin add clarephang/im` 成功（`running` / `Plugin ready` / `im.list` 12 渠道），issue 已回帖关闭。注意兼容范围 `>=0.16.0 <0.17.0`：0.15.4 报告者需先升级宿主。
+6. Paseo 0.17 支持：本地 0.17.4 安装被兼容范围拒绝（`<0.17.0`）。需在 0.17 上验证插件 API 后放宽 `paseo-plugin.json` 的 requirements 并重新提交 registry 审核。
+7. OVERVIEW 补充无去向时的 fallback：消息走 bots+ 在 `plugin-data/bots-contract/paseo-im-targets.json` 列出的 agent（registry 审核建议，下次发版带上）。
