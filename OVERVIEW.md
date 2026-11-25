@@ -8,7 +8,11 @@ Each connection runs a channel adapter in the plugin's daemon subprocess: it hol
 
 ## Setup
 
-Install the plugin, open **IM** in the sidebar, pick a channel, and enter that platform's bot credentials (token, app ID/secret, or homeserver login). WhatsApp, WeChat, and WeCom bot use a QR pairing flow inside the screen instead of manual tokens. Each connection needs a destination: an existing Paseo chat, or a workspace with a provider/model — conversations then create their own agents in that workspace. iMessage requires a macOS daemon host with Full Disk Access and Messages automation; on Linux it shows as unsupported. The WeCom self-built app requires a publicly reachable callback base URL.
+Install the plugin, open **IM** in the sidebar, pick a channel, and enter that platform's bot credentials (token, app ID/secret, or homeserver login). WhatsApp, WeChat, and WeCom bot use a QR pairing flow inside the screen instead of manual tokens. Each connection needs a destination: an existing Paseo chat, or a workspace with a selected provider/model — conversations then create their own agents in that workspace, and the selected provider is the destination for inbound messages sent to an agent. A connection can also pair an owner chat: the screen issues a one-time code and the owner sends it to the bot in a direct message. iMessage requires a macOS daemon host with Full Disk Access and Messages automation; on Linux it shows as unsupported. The WeCom self-built app requires a publicly reachable callback base URL.
+
+## Bots+ integration
+
+Pairing an owner chat lets bots+ notifications reach a messaging service: the plugin forwards each notification's title and approval reference to the paired chat. When the paired owner replies `批 <ref>` to approve or `拒 <ref>` to deny, the decision is recorded locally and bots+ applies it on its next poll. Only direct messages from the paired owner account in the paired chat count as decisions; the same text from other senders or in other chats follows normal message routing.
 
 ## Capabilities and limits
 
